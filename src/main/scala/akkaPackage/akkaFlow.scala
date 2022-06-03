@@ -63,13 +63,14 @@ class AkkaFlow(val dag: DAG, var system : ActorRef) extends Actor :
     log.info("Start Root")
   }
 
-  var dagActorRef = Map[Int, ActorRef]()
-  var Done = Map[Int, Boolean]()
+  if dag.Ids.isEmpty then
+    log.info("Empty dag")
+    system ! "Done"
+    context.stop(self)
 
-  for node <- dag.nodeSet() do
-    Done = Done + (node -> false)
-    dagActorRef = dagActorRef + (node -> context.actorOf(Props(classOf[AkkaFlowNode], DagNode(dag.up(node),
-      dag.down(node), node, dag.condition(node), dag.conditionSkipped(node), dag.doing(node)), self)))
+  var Done: Map[Int, Boolean] = dag.Ids.foldLeft(Map[Int, Boolean]())((map, node) => map + (node -> false))
+  val dagActorRef: Map[Int, ActorRef] = dag.Ids.foldLeft(Map[Int, ActorRef]())((map, nodeId) =>
+    map + (nodeId -> context.actorOf(Props(classOf[AkkaFlowNode], dag.node(nodeId), self))))
 
 
   def getMessegeFrom(fromId : Int, toId : List[Int], newResult: Int => ResultToNode): Unit =
@@ -82,7 +83,7 @@ class AkkaFlow(val dag: DAG, var system : ActorRef) extends Actor :
       for node <- toId do dagActorRef(node) ! newResult(node)
 
   def receive = {
-      case done : DoneFromNode =>
+    case done : DoneFromNode =>
       getMessegeFrom(done.fromId, done.toId, toId => DoneToNode(done.fromId, toId,
         done.parameters.getOrElse(toId, Map[String, String]())))
 
@@ -103,28 +104,19 @@ class AkkaFlow(val dag: DAG, var system : ActorRef) extends Actor :
 class AkkaFlowNode(val dagNode: DagNode, val root : ActorRef) extends Actor :
 
   val log = Logging(context.system, this)
-
-
   var results: Map[Int, ResultToNode] = Map[Int, ResultToNode]()
-  var parameters: Map[Int, Map[String, String]] = Map[Int, Map[String, String]]()
   var state = false
 
-  for node <- dagNode.dagUp do results = results + (node -> NotDoneToNode(node, dagNode.id))
-
-  for node <- dagNode.dagDown do {
-    parameters = parameters + (node -> Map[String, String]())
-  }
+  for node <- dagNode.dagUp do results = results + (node -> NotDoneToNode(node, dagNode.nodeId))
 
   def check(): Unit =
-    if dagNode.condition(results) && !state then
+    if dagNode.condition.condition(results) && !state then
       state = true
-      parameters = dagNode.doing()
+      root ! DoneFromNode(dagNode.nodeId, dagNode.dagDown, dagNode.doing())
 
-      root ! DoneFromNode(dagNode.id, dagNode.dagDown, parameters)
-
-    if dagNode.conditionSkipped(results) && !state then
+    if dagNode.condition.conditionSkipped(results) && !state then
       state = true
-      root ! SkippedFromNode(dagNode.id, dagNode.dagDown)
+      root ! SkippedFromNode(dagNode.nodeId, dagNode.dagDown)
   check()
 
   override def receive =
