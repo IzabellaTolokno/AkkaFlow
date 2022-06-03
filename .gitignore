@@ -1,0 +1,17 @@
+.scala_dependencies
+.worksheet
+.idea
+.bsp
+target/
+logs/
+.js
+.jvm
+*.iml
+.history
+.cache
+.cache-main
+.cache-tests
+.classpath
+.project
+.lib/
+/backend/src/main/resources/tls/localhost.jks

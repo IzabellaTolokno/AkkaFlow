@@ -1,0 +1,18 @@
+{
+        "nodes": [{
+            "name": "English",
+            "id" : 0,
+            "dependency": [],
+            "condition" : "all_success"
+        }, {
+            "name": "Latin",
+            "id" : 1,
+            "dependency": [0],
+            "condition" : "all_success"
+        }, {
+            "name": "Dutch",
+            "id" : 2,
+            "dependency": [0, 1],
+            "condition" : "all_success"
+        }]
+}
