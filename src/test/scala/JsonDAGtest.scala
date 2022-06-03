@@ -22,10 +22,7 @@ class JsonDAGtest extends munit.FunSuite {
       val writer = new PrintWriter(new File(s"C:/Users/izabella.tolokno/example/AkkaFlow/src/test/scala/DAGs/file$j.txt"))
       val dag = Range(0, quantityNodes).foldLeft(DAG()) ((dag, i) => {
         val nDependency = if i > 2 then math.min(Random.nextInt(i - 1) + 1, 50) else 0
-        var dependency = Set[Int]()
-        for _ <- Range(0, nDependency) do {
-          dependency = dependency + Random.nextInt(i)
-        }
+        val dependency = Range(0, nDependency).map(_ => Random.nextInt(i)).toSet
         dag.add("Node " + i.toString, i, dependency.toList,
           "all_success",
           () => Map[Int, Map[String, String]]())

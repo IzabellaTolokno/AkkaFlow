@@ -18,10 +18,9 @@ class akkaFlowTest extends munit.FunSuite{
     extends TestKit(ActorSystem("BinaryTreeSuite"))
       with ImplicitSender:
     test("akkaFlow") {
-      var list = List[ActorRef]()
       val dags = Range(0, 9).map(j => fromFile(s"C:/Users/izabella.tolokno/example/AkkaFlow/src/test/scala/DAGs/file$j.txt")
         .mkString.parseJson.convertTo[DAG])
-      for dag <- dags do list = List(system.actorOf(Props(classOf[AkkaFlow], dag, self))) ++ list
+      for dag <- dags do system.actorOf(Props(classOf[AkkaFlow], dag, self))
       for _ <- dags do expectMsg(10000 millis, "Done")
     }
 

@@ -14,5 +14,5 @@ logs/
 .classpath
 .project
 .lib/
-.test/scala/DAGs
+.src/test/scala/DAGs
 /backend/src/main/resources/tls/localhost.jks
