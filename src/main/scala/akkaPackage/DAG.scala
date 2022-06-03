@@ -1,6 +1,6 @@
 package akkaPackage
 
-import akkaPackage.AkkaFlow.{DoneToNode, ErrorToNode, ResultToNode}
+import akkaPackage.AkkaFlow.{DoneToNode, ErrorToNode, NotDoneToNode, ResultToNode}
 import com.sun.xml.internal.ws.encoding.soap.DeserializationException
 
 import scala.io.Source.fromFile
@@ -15,6 +15,7 @@ class DAG:
   var intToName = Map[Int, String]()
   var intToDoing = Map[Int, () => Map[Int, Map[String, String]]]()
   var conditions = Map[Int, Map[Int, ResultToNode] => Boolean]()
+  var conditionSkipped = Map[Int, Map[Int, ResultToNode] => Boolean]()
   var conditionsName = Map[Int, String]()
 
   def add(name: String, id: Int, dependency: List[Int], condition: String,
@@ -25,24 +26,46 @@ class DAG:
       dagDown = dagDown + (node -> (List(id) ++ dagDown.getOrElse(node,  List[Int]())))
     nameToInt = nameToInt + (name -> id)
     intToName = intToName + (id -> name)
-    
+
     conditionsName = conditionsName + (id -> condition)
     if condition == "all_success" then
       conditions = conditions + (id -> (m => dependency.forall(x => m(x) match
         case DoneToNode(_, _, _) => true
         case _ => false)))
+      conditionSkipped = conditionSkipped + (id -> (m => dependency.exists(x => m(x) match
+        case DoneToNode(_, _, _) => false
+        case NotDoneToNode(_, _) => false
+        case _ => true)))
+
     if condition == "one_success" then
       conditions = conditions + (id -> (m => dependency.exists(x => m(x) match
         case DoneToNode(_, _, _) => true
         case _ => false)))
+      conditionSkipped = conditionSkipped + (id -> (m => dependency.forall(x => m(x) match
+        case DoneToNode(_, _, _) => false
+        case NotDoneToNode(_, _) => false
+        case _ => true)))
+
     if condition == "all_failed" then
       conditions = conditions + (id -> (m => dependency.forall(x => m(x) match
         case ErrorToNode(_, _, _) => true
+        case NotDoneToNode(_, _) => false
         case _ => false)))
+      conditionSkipped = conditionSkipped + (id -> (m => dependency.exists(x => m(x) match
+        case ErrorToNode(_, _, _) => false
+        case NotDoneToNode(_, _) => false
+        case _ => true)))
+
     if condition == "one_failed" then
       conditions = conditions + (id -> (m => dependency.exists(x => m(x) match
         case ErrorToNode(_, _, _) => true
+        case NotDoneToNode(_, _) => false
         case _ => false)))
+      conditionSkipped = conditionSkipped + (id -> (m => dependency.forall(x => m(x) match
+        case ErrorToNode(_, _, _) => false
+        case NotDoneToNode(_, _) => false
+        case _ => true)))
+
     intToDoing = intToDoing + (id -> doing)
 
   def isEmpty(id : Int) = dagDown(id).isEmpty
@@ -60,7 +83,7 @@ class DAG:
 
 
 class DagNode(val dagUp : List[Int], val dagDown : List[Int], val id : Int, val condition: Map[Int, ResultToNode] => Boolean,
-              val doing : () => Map[Int, Map[String, String]])
+              val conditionSkipped: Map[Int, ResultToNode] => Boolean, val doing : () => Map[Int, Map[String, String]])
 
 
 

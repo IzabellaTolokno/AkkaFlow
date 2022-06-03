@@ -26,6 +26,11 @@ object AkkaFlow:
     def parameters = Map[String, String]()
 
 
+  case class SkippedToNode(fromId : Int, toId : Int) extends ResultToNode:
+    def result = "Skip"
+    def parameters = Map[String, String]()
+
+
   trait ResultFromNode:
     def result: String
     def parameters: Map[Int, Map[String, String]]
@@ -44,6 +49,11 @@ object AkkaFlow:
     def parameters = Map[Int, Map[String, String]]()
 
 
+  case class SkippedFromNode(fromId : Int, toId : List[Int]) extends ResultFromNode:
+    def result = "Skip"
+    def parameters = Map[Int, Map[String, String]]()
+
+
 
 
 class AkkaFlow(val dag: DAG, var system : ActorRef) extends Actor :
@@ -59,34 +69,31 @@ class AkkaFlow(val dag: DAG, var system : ActorRef) extends Actor :
   for node <- dag.nodeSet() do
     Done = Done + (node -> false)
     dagActorRef = dagActorRef + (node -> context.actorOf(Props(classOf[AkkaFlowNode], DagNode(dag.up(node),
-      dag.down(node), node, dag.condition(node), dag.doing(node)), self)))
+      dag.down(node), node, dag.condition(node), dag.conditionSkipped(node), dag.doing(node)), self)))
+
+
+  def getMessegeFrom(fromId : Int, toId : List[Int], newResult: Int => ResultToNode): Unit =
+    Done = Done + (fromId -> true)
+    if Done.forall((_, bool) => bool) then
+      system ! "Done"
+      log.info("Finish")
+      context.stop(self)
+    else
+      for node <- toId do dagActorRef(node) ! newResult(node)
 
   def receive = {
-    case done : DoneFromNode =>
-      log.info(s"Root get done message from ${done.fromId}")
-      Done = Done + (done.fromId -> true)
-      if Done.forall((_, bool) => bool) then
-        system ! "Done"
-        log.info("Finish")
-        context.stop(self)
-      for node <- done.toId do dagActorRef(node) ! DoneToNode(done.fromId, node,
-        done.parameters.getOrElse(node, Map[String, String]()))
+      case done : DoneFromNode =>
+      getMessegeFrom(done.fromId, done.toId, toId => DoneToNode(done.fromId, toId,
+        done.parameters.getOrElse(toId, Map[String, String]())))
 
     case notDone : NotDoneFromNode =>
-      Done = Done + (notDone.fromId -> true)
-      if Done.forall((_, bool) => bool) then
-        system ! "Done"
-        log.info("Finish")
-        context.stop(self)
-      for node <- notDone.toId do dagActorRef(node) ! NotDoneToNode(notDone.fromId, node)
+      getMessegeFrom(notDone.fromId, notDone.toId, toId => NotDoneToNode(notDone.fromId, toId))
 
     case error: ErrorFromNode =>
-      Done = Done + (error.fromId -> true)
-      if Done.forall((_, bool) => bool) then
-        system ! "Done"
-        log.info("Finish")
-        context.stop(self)
-      for node <- error.toId do dagActorRef(node) ! ErrorToNode(error.fromId, node, error.error)
+      getMessegeFrom(error.fromId, error.toId, toId => ErrorToNode(error.fromId, toId, error.error))
+
+    case skipped: SkippedFromNode =>
+      getMessegeFrom(skipped.fromId, skipped.toId, toId => SkippedToNode(skipped.fromId, toId))
 
     case message =>
       log.info(s"Wrong message $message")
@@ -114,6 +121,10 @@ class AkkaFlowNode(val dagNode: DagNode, val root : ActorRef) extends Actor :
       parameters = dagNode.doing()
 
       root ! DoneFromNode(dagNode.id, dagNode.dagDown, parameters)
+
+    if dagNode.conditionSkipped(results) && !state then
+      state = true
+      root ! SkippedFromNode(dagNode.id, dagNode.dagDown)
   check()
 
   override def receive =
