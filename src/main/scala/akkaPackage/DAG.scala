@@ -7,6 +7,8 @@ import com.sun.xml.internal.ws.encoding.soap.DeserializationException
 import scala.io.Source.fromFile
 import spray.json.{JsArray, *}
 
+import scala.util.Random
+
 object DAG:
   sealed trait Condition:
     val name : String
@@ -60,6 +62,18 @@ object DAG:
       case "all_failed" => AllFailed(dependency)
       case "one_failed" => OneFailed(dependency)
       case _ => throw Error("Wrong condition")
+
+  def generateDag(quantityNodes : Int): DAG =
+    Range(0, quantityNodes).foldLeft(DAG(Iterator.continually(Random.nextPrintableChar)
+      .filter(_.isLetter)
+      .take(15)
+      .mkString)) ((dag, i) => {
+      val nDependency = if i > 2 then math.min(Random.nextInt(i - 1) + 1, 50) else 0
+      val dependency = Range(0, nDependency).map(_ => Random.nextInt(i)).toSet
+      dag.add("Node_" + i.toString + "_dag_" + dag.dagName, i, dependency.toList,
+        "all_success",
+        () => Map[Int, Map[String, String]]())
+    })
 
 
 

@@ -22,10 +22,9 @@ lazy val root = (project in file("."))
   )
 
 
-
+libraryDependencies += "com.typesafe.akka" %% "akka-cluster-typed" % akkaVersion
 libraryDependencies += "org.scala-lang" % "scala-library" % "2.13.8"
 libraryDependencies += "org.scala-lang" % "scala-compiler" % "2.13.8"
-libraryDependencies += "org.scala-lang.modules" %% "scala-parser-combinators" % "2.1.1"
 libraryDependencies += "io.spray" %%  "spray-json" % "1.3.6"
 libraryDependencies += "com.typesafe.akka" %% "akka-actor-typed" % akkaVersion
 libraryDependencies += "ch.qos.logback" % "logback-classic" % "1.2.11"

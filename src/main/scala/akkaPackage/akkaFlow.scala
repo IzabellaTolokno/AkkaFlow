@@ -2,16 +2,15 @@ package akkaPackage
 
 import akka.event.Logging
 import akka.actor.*
+import akka.cluster.{Cluster, ClusterEvent}
 import akkaPackage.AkkaFlow.*
+import akkaPackage.Storage.*
+import akka.pattern.{ask, retry}
+import akka.util.Timeout
 
-import java.time.LocalDateTime
-import scala.language.postfixOps
 import concurrent.duration.DurationInt
-import akka.actor.typed.Dispatchers
-import akka.actor.typed.scaladsl.Behaviors
+import scala.concurrent.ExecutionContext
 
-import java.util.concurrent.Callable
-import concurrent.ExecutionContext.Implicits.global
 
 object AkkaFlow:
   trait ResultToNode:
@@ -64,12 +63,17 @@ object AkkaFlow:
 
   case class AskInfo(Id : Int)
 
+  val ReceivedMessage: String = "Received"
 
 
 
 
-class AkkaFlow(val dag: DAG, val system : ActorRef, val storage : ActorRef) extends Actor :
-  val log = Logging(context.system, this)
+
+class AkkaFlow(val dag: DAG, val system : ActorRef, val storage : ActorRef, addresses: Vector[Address]) extends Actor with ActorLogging:
+  implicit val executionContext: ExecutionContext = context.dispatcher
+  implicit val timeout : Timeout = Timeout(1.seconds)
+  implicit val scheduler: akka.actor.Scheduler = context.system.scheduler
+  
 
   override def preStart() = {
     log.info(s"Start DAG ${dag.dagName}")
@@ -84,20 +88,30 @@ class AkkaFlow(val dag: DAG, val system : ActorRef, val storage : ActorRef) exte
     storage ! Restart(dag.dagName)
     context.become(start())
 
+  override def postStop(): Unit = {
+    super.postStop()
+  }
+
+
   var results: Map[Int, ResultFromNode] = dag.Ids.map(nodeId => {
     context.actorOf(Props(classOf[AkkaFlowNode], dag.node(nodeId)),  dag.intToName(nodeId))
     nodeId -> NotDoneFromNode(nodeId, dag.dagDown(nodeId))
   }).toMap
 
-  var scheduler: Map[(Int, Int), Cancellable] = Map[(Int, Int), Cancellable]()
 
   def resendMessage(result: ResultFromNode) =
     for nodeId <- result.toId do
       context.child(dag.intToName(nodeId)) match
         case Some(actorRef: ActorRef) =>
           results.getOrElse(nodeId, NotDoneFromNode(result.fromId, result.toId)) match
-            case _ : NotDoneFromNode => scheduler = scheduler + ((result.fromId, nodeId) -> context.system.scheduler
-              .scheduleAtFixedRate(0 millis, 1000 millis, actorRef, convertMessage(result)(nodeId)))
+            case _ : NotDoneFromNode =>
+              akka.pattern.retry(() => (actorRef ? convertMessage(result)(nodeId))
+                .map(str => if str == ReceivedMessage then str else Error())
+                .recover(error => {
+                  results.getOrElse(nodeId, NotDoneFromNode(result.fromId, result.toId)) match
+                    case _ : NotDoneFromNode => error
+                    case _ => ReceivedMessage
+                }), attempts = 10, 100.millis)
             case _ =>
         case _ =>
 
@@ -125,39 +139,53 @@ class AkkaFlow(val dag: DAG, val system : ActorRef, val storage : ActorRef) exte
             resendMessage(result)
             nodeId -> result
       }).toMap
-      context.become(work())
+      context.become(active(Vector()))
     }
 
-  def work() : Receive =
-    case result : ResultFromNode =>
+  def active(addresses: Vector[Address]) : Receive = {
+    case result: ResultFromNode =>
       storage ! NewResult(dag.dagName, result)
       results = results + (result.fromId -> result)
       if results.forall((_, result) => result match
-        case _ : NotDoneFromNode => false
+        case _: NotDoneFromNode => false
         case _ => true) then
         storage ! Done(dag.dagName)
         log.info(s"DAG ${dag.dagName} finish")
+        sender() ! ReceivedMessage
         context.stop(self)
       else
         resendMessage(result)
-      sender() ! ReceivedFromRoot()
-
-    case Received(fromId, toId) => scheduler((fromId, toId)).cancel()
+        sender() ! ReceivedMessage
 
     case AskInfo(id) => results.foreach((_, result) => if result.toId.contains(id) then sender() ! convertMessage(result)(id))
 
-    case message =>
-      log.info(s"Wrong message $message")
+    case message if message == ReceivedMessage =>
 
-  override def receive: Receive = work()
+    case ClusterMain.Add(address) =>
+      context.become(active(addresses :+ address))
+    case ClusterMain.Remove(address) =>
+      val next = addresses filterNot (_ == address)
+      context.become(active(next))
+      ???
 
-class AkkaFlowNode(val dagNode: DagNode) extends Actor :
-  val log = Logging(context.system, this)
+    case message => log.info(s"Wrong message $message")
+  }
+
+  override def receive: Receive = active(Vector())
+
+class AkkaFlowNode(val dagNode: DagNode) extends Actor with ActorLogging:
+  import context.dispatcher
+  implicit val timeout : Timeout = Timeout(1.seconds)
+  implicit val scheduler: akka.actor.Scheduler = context.system.scheduler
+
   var results: Map[Int, ResultToNode] = Map[Int, ResultToNode]()
   var state = false
-  var scheduler : List[Cancellable] = List()
 
   for node <- dagNode.dagUp do results = results + (node -> NotDoneToNode(node, dagNode.nodeId))
+
+  override def postStop(): Unit = {
+    super.postStop()
+  }
 
   def check(): Unit =
     if dagNode.condition.condition(results) && !state then
@@ -165,32 +193,31 @@ class AkkaFlowNode(val dagNode: DagNode) extends Actor :
       state = true
       try
         val parameters =  dagNode.doing()
-        scheduler = List(context.system.scheduler.scheduleAtFixedRate(0 millis, 1000 millis,
-          context.parent, DoneFromNode(dagNode.nodeId, dagNode.dagDown, parameters)))
+        akka.pattern.retry(() => (context.parent ? DoneFromNode(dagNode.nodeId, dagNode.dagDown, parameters))
+          .map(str => if str == ReceivedMessage then str else Error()), attempts = 10, 1.millis)
       catch
-        case error: Error => scheduler = List(context.system.scheduler.scheduleAtFixedRate(0 millis, 1000 millis,
-          context.parent, ErrorFromNode(dagNode.nodeId, dagNode.dagDown, error)))
+        case error: Error =>
+          akka.pattern.retry(() => (context.parent ? ErrorFromNode(dagNode.nodeId, dagNode.dagDown, error))
+            .map(str => if str == ReceivedMessage then str else Error()), attempts = 10, 1000.millis)
 
 
     if dagNode.condition.conditionSkipped(results) && !state then
       log.info(s"Condition for ${dagNode.name} in DAG ${dagNode.dagName} is failed")
       state = true
-      scheduler = List(context.system.scheduler.scheduleAtFixedRate(0 millis, 1000 millis,
-        context.parent,  SkippedFromNode(dagNode.nodeId, dagNode.dagDown)))
+      akka.pattern.retry(() => (context.parent ? SkippedFromNode(dagNode.nodeId, dagNode.dagDown))
+        .map(str => if str == ReceivedMessage then str else Error()), attempts = 10, 1000.millis)
 
   check()
 
-  override def receive =
-    case result : ResultToNode => {
+  override def receive = {
+    case result: ResultToNode => {
       if !state then
         results = results + (result.fromId -> result)
         check()
-      context.parent ! Received(result.fromId, result.toId)
+      context.parent ! ReceivedMessage
     }
-    case _ : ReceivedFromRoot => {
-      scheduler.foreach(cancellable => cancellable.cancel())
-      context.stop(self)
-    }
+    case message: String if message == ReceivedMessage => context.stop(self)
     case message => log.info(s"Wrong message $message")
+  }
 
 
