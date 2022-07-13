@@ -1,37 +1,15 @@
 package akkaPackage
 
-import akka.actor.{Actor, ActorRef, Address}
-import akka.cluster.{Cluster, ClusterEvent}
+import akka.actor.typed.ActorSystem
+import com.typesafe.config.ConfigFactory
 
-object ClusterMain:
-  case class Ask(actorRef: ActorRef)
+object ClusterMain extends App:
+  def config(port : Int) = ConfigFactory.parseString(s"""
+       akka.remote.artery.canonical.port = $port
+        """).withFallback(ConfigFactory.load())
+  val sys = ActorSystem(AkkaFlowSystem.behavior(), "Main", config(25520))
 
-  sealed trait ClusterInfo:
-    val address: Address
-  case class Remove(address: Address) extends ClusterInfo
-  case class Add(address: Address) extends ClusterInfo
+  ActorSystem(ClusterWorker.behavior(10), "Main", config(25521))
+  ActorSystem(ClusterWorker.behavior(10), "Main", config(25522))
 
-class ClusterMain extends Actor{
-  val cluster = Cluster(context.system)
-  cluster.subscribe(self, classOf[ClusterEvent.MemberRemoved])
-  cluster.subscribe(self, classOf[ClusterEvent.MemberUp])
-  cluster.join(cluster.selfAddress)
-
-  val test = cluster.selfAddress.copy(port = Some(10))
-  
-  override def receive : Receive = active(Vector())
-  
-  def active(addresses: Vector[Address]): Receive = ({
-    case ClusterEvent.MemberUp(member) if member.address != cluster.selfAddress && member.address != test=>
-      context.become(active(addresses :+ member.address))
-      context.children.foreach(child => child ! ClusterMain.Add(member.address))
-    case ClusterEvent.MemberRemoved(member, _) =>
-      val next = addresses filterNot (_ == member.address)
-      context.become(active(next))
-      context.children.foreach(child => child ! ClusterMain.Remove(member.address))
-    case ClusterMain.Ask(actorRef) => actorRef ! addresses
-      
-  }: Receive)
-
-
-}
+//  sys ! AkkaFlowSystem.DagRequest(DAG.generateDag(10))

@@ -1,6 +1,7 @@
 package akkaPackage
 
-import akkaPackage.AkkaFlow.{DoneToNode, ErrorToNode, NotDoneToNode, ResultToNode}
+import akkaPackage.AkkaFlow.*
+import akkaPackage.AkkaFlowNode.*
 import akkaPackage.DAG.{Condition, conditionByName}
 import com.sun.xml.internal.ws.encoding.soap.DeserializationException
 
@@ -17,45 +18,45 @@ object DAG:
 
   case class AllSuccess(dependency : List[Int]) extends Condition:
     override val name = "all_success"
-    override val condition = m => dependency.forall(x => m(x) match
+    override val condition: Map[Int, ResultToNode] => Boolean = m => dependency.forall(x => m(x) match
       case DoneToNode(_, _, _) => true
       case _ => false)
-    override val conditionSkipped = m => dependency.exists(x => m(x) match
+    override val conditionSkipped: Map[Int, ResultToNode] => Boolean = m => dependency.exists(x => m(x) match
       case DoneToNode(_, _, _) => false
       case NotDoneToNode(_, _) => false
       case _ => true)
 
   case class OneSuccess(dependency : List[Int]) extends Condition:
     override val name = "one_success"
-    override val condition = m => dependency.exists(x => m(x) match
+    override val condition: Map[Int, ResultToNode] => Boolean = m => dependency.exists(x => m(x) match
       case DoneToNode(_, _, _) => true
       case _ => false)
-    override val conditionSkipped = m => dependency.forall(x => m(x) match
+    override val conditionSkipped: Map[Int, ResultToNode] => Boolean = m => dependency.forall(x => m(x) match
       case DoneToNode(_, _, _) => false
       case NotDoneToNode(_, _) => false
       case _ => true)
 
   case class AllFailed(dependency : List[Int]) extends Condition:
     override val name = "all_failed"
-    override val condition = m => dependency.forall(x => m(x) match
+    override val condition: Map[Int, ResultToNode] => Boolean = m => dependency.forall(x => m(x) match
       case ErrorToNode(_, _, _) => true
       case _ => false)
-    override val conditionSkipped = m => dependency.exists(x => m(x) match
+    override val conditionSkipped: Map[Int, ResultToNode] => Boolean = m => dependency.exists(x => m(x) match
       case ErrorToNode(_, _, _) => false
       case NotDoneToNode(_, _) => false
       case _ => true)
 
   case class OneFailed(dependency : List[Int]) extends Condition:
     override val name = "one_failed"
-    override val condition = m => dependency.exists(x => m(x) match
+    override val condition: Map[Int, ResultToNode] => Boolean = m => dependency.exists(x => m(x) match
       case ErrorToNode(_, _, _) => true
       case _ => false)
-    override val conditionSkipped = m => dependency.forall(x => m(x) match
+    override val conditionSkipped: Map[Int, ResultToNode] => Boolean = m => dependency.forall(x => m(x) match
       case ErrorToNode(_, _, _) => false
       case NotDoneToNode(_, _) => false
       case _ => true)
 
-  def conditionByName(name : String, dependency: List[Int]) =
+  def conditionByName(name : String, dependency: List[Int]): Condition =
     name match
       case "all_success" => AllSuccess(dependency)
       case "one_success" => OneSuccess(dependency)
@@ -93,19 +94,19 @@ case class DAG(dagName : String, Ids: Set[Int] = Set[Int](),
       nameToInt + (name -> nodeId), intToName + (nodeId -> name), intToDoing + (nodeId -> doing),
       conditions + (nodeId -> DAG.conditionByName(condition, dependency)))
     
-  def node(nodeId : Int) = DagNode(dagName, intToName(nodeId), dagUp(nodeId),
+  def node(nodeId : Int): DagNode = DagNode(dagName, intToName(nodeId), dagUp(nodeId),
     dagDown(nodeId), nodeId, conditions(nodeId), intToDoing(nodeId))
 
 
-  def isEmpty(nodeId : Int) = dagDown(nodeId).isEmpty
+  def isEmpty(nodeId : Int): Boolean = dagDown(nodeId).isEmpty
 
 
-class DagNode(val dagName : String, val name : String, val dagUp : List[Int], val dagDown : List[Int], val nodeId : Int, val condition: Condition,
-              val doing : () => Map[Int, Map[String, String]])
+case class DagNode(dagName : String, name : String, dagUp : List[Int], dagDown : List[Int], nodeId : Int, condition: Condition,
+                   doing : () => Map[Int, Map[String, String]])
 
 object MyJsonProtocol extends DefaultJsonProtocol {
   implicit object ColorJsonFormat extends RootJsonFormat[DAG] {
-    def write(dag : DAG) = {
+    def write(dag : DAG): JsObject = {
       JsObject("dag name" -> JsString(dag.dagName),
         "nodes" -> JsArray(dag.Ids.map(nodeId => {
         JsObject(
@@ -115,7 +116,7 @@ object MyJsonProtocol extends DefaultJsonProtocol {
           "condition" -> JsString(dag.conditions(nodeId).name))
       }).toVector))
     }
-    def read(value: JsValue) =
+    def read(value: JsValue): DAG =
       value.asJsObject.getFields("dag name","nodes") match {
         case Seq(JsString(dagName), JsArray(vector: Vector[JsValue])) =>
           vector.foldLeft(DAG(dagName))((dag, value2) => {
