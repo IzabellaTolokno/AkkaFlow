@@ -7,6 +7,8 @@ import com.sun.xml.internal.ws.encoding.soap.DeserializationException
 import scala.io.Source.fromFile
 import spray.json.{JsArray, *}
 
+import scala.util.Random
+
 object DAG:
   sealed trait Condition:
     val name : String
@@ -61,11 +63,23 @@ object DAG:
       case "one_failed" => OneFailed(dependency)
       case _ => throw Error("Wrong condition")
 
+  def generateDag(quantityNodes : Int): DAG =
+    Range(0, quantityNodes).foldLeft(DAG(Iterator.continually(Random.nextPrintableChar)
+      .filter(_.isLetter)
+      .take(15)
+      .mkString)) ((dag, i) => {
+      val nDependency = if i > 2 then math.min(Random.nextInt(i - 1) + 1, 50) else 0
+      val dependency = Range(0, nDependency).map(_ => Random.nextInt(i)).toSet
+      dag.add("Node_" + i.toString + "_dag_" + dag.dagName, i, dependency.toList,
+        "all_success",
+        () => Map[Int, Map[String, String]]())
+    })
 
 
 
 
-case class DAG(var Ids: Set[Int] = Set[Int](),
+
+case class DAG(dagName : String, Ids: Set[Int] = Set[Int](),
                dagUp : Map[Int, List[Int]] = Map[Int, List[Int]]().withDefaultValue(List[Int]()),
                dagDown : Map[Int, List[Int]] = Map[Int, List[Int]]().withDefaultValue(List[Int]()),
                nameToInt : Map[String, Int] = Map[String, Int](),
@@ -74,25 +88,26 @@ case class DAG(var Ids: Set[Int] = Set[Int](),
                conditions : Map[Int, Condition] = Map[Int, Condition]()):
   def add(name: String, nodeId: Int, dependency: List[Int], condition: String,
           doing : () => Map[Int, Map[String, String]]) : DAG =
-    DAG(Ids + nodeId, dagUp + (nodeId -> dependency), dependency.foldLeft(dagDown)((dagDown, node) =>
+    DAG(dagName, Ids + nodeId, dagUp + (nodeId -> dependency), dependency.foldLeft(dagDown)((dagDown, node) =>
       dagDown + (node -> (List(nodeId) ++ dagDown.getOrElse(node,  List[Int]())))),
       nameToInt + (name -> nodeId), intToName + (nodeId -> name), intToDoing + (nodeId -> doing),
       conditions + (nodeId -> DAG.conditionByName(condition, dependency)))
     
-  def node(nodeId : Int) = DagNode(dagUp(nodeId),
+  def node(nodeId : Int) = DagNode(dagName, intToName(nodeId), dagUp(nodeId),
     dagDown(nodeId), nodeId, conditions(nodeId), intToDoing(nodeId))
 
 
   def isEmpty(nodeId : Int) = dagDown(nodeId).isEmpty
 
 
-class DagNode(val dagUp : List[Int], val dagDown : List[Int], val nodeId : Int, val condition: Condition,
+class DagNode(val dagName : String, val name : String, val dagUp : List[Int], val dagDown : List[Int], val nodeId : Int, val condition: Condition,
               val doing : () => Map[Int, Map[String, String]])
 
 object MyJsonProtocol extends DefaultJsonProtocol {
   implicit object ColorJsonFormat extends RootJsonFormat[DAG] {
     def write(dag : DAG) = {
-      JsObject("nodes" -> JsArray(dag.Ids.map(nodeId => {
+      JsObject("dag name" -> JsString(dag.dagName),
+        "nodes" -> JsArray(dag.Ids.map(nodeId => {
         JsObject(
           "name" -> JsString(dag.intToName(nodeId)),
           "id" -> JsNumber(nodeId),
@@ -101,9 +116,9 @@ object MyJsonProtocol extends DefaultJsonProtocol {
       }).toVector))
     }
     def read(value: JsValue) =
-      value.asJsObject.getFields("nodes") match {
-        case Seq(JsArray(vector: Vector[JsValue])) =>
-          vector.foldLeft(DAG())((dag, value2) => {
+      value.asJsObject.getFields("dag name","nodes") match {
+        case Seq(JsString(dagName), JsArray(vector: Vector[JsValue])) =>
+          vector.foldLeft(DAG(dagName))((dag, value2) => {
             value2.asJsObject.getFields("name", "id", "dependency", "condition") match {
               case Seq(JsString(name), JsNumber(nodeId), JsArray(dependency), JsString(condition)) =>
                 val dependencyList = dependency.map {
